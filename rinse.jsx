@@ -206,6 +206,8 @@ const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFo
   const [progress, setProgress] = React.useState(0);
   const duration = 6500;
   const startRef = React.useRef(null);
+  const onFooterChangeRef = React.useRef(onFooterChange);
+  onFooterChangeRef.current = onFooterChange;
 
   React.useEffect(() => {
     const waterSound = SoundManager.water(duration / 1000);
@@ -253,12 +255,17 @@ const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFo
   const paperTopOffset = PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / Math.max(stageScale, 0.001));
 
   React.useEffect(() => {
-    if (!onFooterChange) return;
-    onFooterChange({
+    const setFooter = onFooterChangeRef.current;
+    if (!setFooter) return;
+    setFooter({
       status: `> Rinsing print · ${Math.round(progress * 100)}%`,
     });
-    return () => onFooterChange(null);
-  }, [onFooterChange, progress]);
+  }, [progress]);
+
+  React.useEffect(() => () => {
+    const setFooter = onFooterChangeRef.current;
+    if (setFooter) setFooter(null);
+  }, []);
 
   return (
     <div style={{

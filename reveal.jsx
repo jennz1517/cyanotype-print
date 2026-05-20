@@ -14,6 +14,12 @@ const RevealPhase = ({ items, paperTone, printVariationSeed = 0, onSave, onNew, 
   const stageScale = React.useContext(window.ScaleContext || React.createContext(1)) || 1;
   const [entered, setEntered] = React.useState(false);
   const paperRef = React.useRef(null);
+  const onFooterChangeRef = React.useRef(onFooterChange);
+  onFooterChangeRef.current = onFooterChange;
+  const onSaveRef = React.useRef(onSave);
+  onSaveRef.current = onSave;
+  const onNewRef = React.useRef(onNew);
+  onNewRef.current = onNew;
 
   React.useEffect(() => {
     const t = setTimeout(() => setEntered(true), 50);
@@ -21,16 +27,21 @@ const RevealPhase = ({ items, paperTone, printVariationSeed = 0, onSave, onNew, 
   }, []);
 
   React.useEffect(() => {
-    if (!onFooterChange) return;
-    onFooterChange({
+    const setFooter = onFooterChangeRef.current;
+    if (!setFooter) return;
+    setFooter({
       status: '> Print complete',
       actions: [
-        { label: 'New print', onClick: onNew, variant: 'secondary' },
-        { label: 'Save as image', onClick: () => onSave(paperRef.current), variant: 'primary' },
+        { label: 'New print', onClick: () => onNewRef.current(), variant: 'secondary' },
+        { label: 'Save as image', onClick: () => onSaveRef.current(paperRef.current), variant: 'primary' },
       ],
     });
-    return () => onFooterChange(null);
-  }, [onFooterChange, onSave, onNew]);
+  }, []);
+
+  React.useEffect(() => () => {
+    const setFooter = onFooterChangeRef.current;
+    if (setFooter) setFooter(null);
+  }, []);
 
   const paperSeed = React.useMemo(
     () => window.deriveCyanotypePaperSeed(items, printVariationSeed),

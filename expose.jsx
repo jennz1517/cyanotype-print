@@ -4,60 +4,12 @@
 // Specimens stay on top, unchanged. No moving sun, no cast shadows —
 // real cyanotype exposures rely on soft, even UV, not directional light.
 
-const EXPOSE_DURATION_MS = 7000;
-const EXPOSE_DURATION_SEC = 7;
 const PAPER_COLOR_HOLD_SEC = 1;
+const EXPOSE_DURATION_SEC = 7;
 const PAPER_HOLD_PROGRESS = PAPER_COLOR_HOLD_SEC / EXPOSE_DURATION_SEC;
 
-const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMotion, trayBandHeight = 0 }) => {
+const ExposePhase = ({ items, paperTone, progress = 0, reducedMotion, trayBandHeight = 0 }) => {
   const stageScale = React.useContext(window.ScaleContext || React.createContext(1)) || 1;
-  const [progress, setProgress] = React.useState(0); // 0..1 over 7s
-  const [skipRequested, setSkipRequested] = React.useState(false);
-  const duration = EXPOSE_DURATION_MS;
-  const startRef = React.useRef(null);
-  const rafRef = React.useRef(null);
-  const droneRef = React.useRef(null);
-
-  React.useEffect(() => {
-    droneRef.current = SoundManager.sunDrone();
-    const step = (ts) => {
-      if (startRef.current == null) startRef.current = ts;
-      const elapsed = ts - startRef.current;
-      const p = Math.min(1, elapsed / duration);
-      setProgress(p);
-      if (p < 1) {
-        rafRef.current = requestAnimationFrame(step);
-      } else {
-        setTimeout(() => onComplete(), 800);
-      }
-    };
-    rafRef.current = requestAnimationFrame(step);
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      if (droneRef.current) droneRef.current.stop();
-    };
-  }, []);
-
-  const handleSkip = React.useCallback(() => {
-    if (skipRequested) return;
-    setSkipRequested(true);
-    // speed up to end in 1.2s
-    cancelAnimationFrame(rafRef.current);
-    const startP = progress;
-    const skipDur = 1200;
-    const startTs = performance.now();
-    const step = (ts) => {
-      const k = Math.min(1, (ts - startTs) / skipDur);
-      const p = startP + (1 - startP) * k;
-      setProgress(p);
-      if (k < 1) requestAnimationFrame(step);
-      else setTimeout(() => onComplete(), 400);
-    };
-    requestAnimationFrame(step);
-  }, [skipRequested, progress, onComplete]);
-
-  // No directional sun in a real cyanotype exposure — the whole sheet bakes evenly
-  // under UV. Keep a gentle daylight sky that warms over the exposure.
 
   const lerp = (a, b, t) => a + (b - a) * t;
   const easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
@@ -70,16 +22,12 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
     ];
   };
 
-  // Sky base warms slightly as exposure advances (even, non-directional).
   const skyWarmth = easeInOut(Math.max(0, (progress - PAPER_HOLD_PROGRESS) / (1 - PAPER_HOLD_PROGRESS)));
   const skyGradient = `linear-gradient(180deg,
     rgb(${Math.round(lerp(236, 242, skyWarmth))}, ${Math.round(lerp(236, 238, skyWarmth))}, ${Math.round(lerp(236, 228, skyWarmth))}) 0%,
     rgb(${Math.round(lerp(216, 228, skyWarmth))}, ${Math.round(lerp(216, 224, skyWarmth))}, ${Math.round(lerp(216, 212, skyWarmth))}) 100%)`;
   const UI = () => window.UI_THEME || { fg: '#000', fgMuted: '#5a5a5a', line: '#000', bg: '#fff', font: 'sans-serif', fontMono: 'monospace', paperShadow: '6px 6px 0 #000' };
 
-  // Paper color: holds the original paperTone.base for the first 1s,
-  // then eases toward the exposed coated tone across the remaining 6s.
-  // Interpolation is in sRGB — simple and predictable for this short ramp.
   const paperColor = (() => {
     const base = paperTone.base || '#FEFCF4';
     const target = window.EXPOSED_COATED_PAPER_HEX || '#7A7F75';
@@ -90,25 +38,6 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
     return `rgb(${Math.round(lerp(r1, r2, t))}, ${Math.round(lerp(g1, g2, t))}, ${Math.round(lerp(b1, b2, t))})`;
   })();
 
-  // Shadow offset / opacity — REMOVED. No directional sun = no cast shadows.
-
-  // Elapsed time display (7s total)
-  const elapsedSec = Math.floor(progress * EXPOSE_DURATION_SEC);
-
-  React.useEffect(() => {
-    if (!onFooterChange) return;
-    onFooterChange({
-      status: `> Exposing to sunlight · ${String(elapsedSec).padStart(2, '0')}s · ${Math.round(progress * 100)}%`,
-      action: {
-        label: skipRequested ? 'Speeding up…' : 'Speed up',
-        onClick: handleSkip,
-        disabled: skipRequested,
-        variant: 'secondary',
-      },
-    });
-    return () => onFooterChange(null);
-  }, [onFooterChange, elapsedSec, progress, skipRequested, handleSkip]);
-
   const trayPad = trayBandHeight || 0;
   const viewportH = typeof window !== 'undefined' ? window.innerHeight : undefined;
   const displayScale = window.getPhasePaperDisplayScale
@@ -117,6 +46,7 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
   const paperTopOffset = window.getPhasePaperTopOffset
     ? window.getPhasePaperTopOffset(stageScale)
     : 0;
+
   return (
     <div
       style={{
@@ -134,7 +64,7 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
         overflow: 'visible',
       }}
     >
-      <div style={{
+      <motion.div style={{
         position: 'absolute',
         left: 0,
         right: 0,
@@ -149,9 +79,9 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
         {!reducedMotion && Array.from({ length: 40 }).map((_, i) => (
           <DustMote key={i} seed={i} progress={progress} />
         ))}
-      </div>
+      </motion.div>
 
-      <div style={{
+      <motion.div style={{
         position: 'absolute',
         inset: 0,
         zIndex: 1,
@@ -160,7 +90,7 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
         justifyContent: 'center',
         pointerEvents: 'none',
       }}>
-        <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+        <motion.div style={{ position: 'relative', pointerEvents: 'auto' }}>
           <motion.div
             data-paper="true"
             style={{
@@ -174,7 +104,7 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
               transformOrigin: 'top center',
             }}
           >
-            <div style={{
+            <motion.div style={{
               position: 'relative',
               zIndex: 1,
               width: '100%',
@@ -184,7 +114,6 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
               boxShadow: 'none',
               border: `1px solid ${UI().line}`,
             }}>
-
               {items.map(item => {
                 const b = BOTANICALS[item.kind];
                 const w = b.bounds.w * item.scale;
@@ -202,11 +131,10 @@ const ExposePhase = ({ items, paperTone, onComplete, onFooterChange, reducedMoti
                   </motion.div>
                 );
               })}
-            </div>
-
+            </motion.div>
           </motion.div>
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
     </div>
   );
 };
@@ -216,7 +144,6 @@ const exposeRand = (seed, n) => {
   return x - Math.floor(x);
 };
 
-// Soft warmth washes + haze — Lissajous drift tied to exposure progress (no directional sun).
 const WARMTH_BLOBS = [
   { phase: 0, fx: 0.41, fy: 0.37, color: 'rgba(255, 232, 195, 0.9)' },
   { phase: 2.1, fx: 0.29, fy: 0.53, color: 'rgba(255, 225, 185, 0.75)' },
@@ -265,7 +192,7 @@ const SkyHazeBand = ({ seed, progress }) => {
   const top = ((r1 * 85 + progress * 35 + Math.sin(tau * 0.22 + r2 * 6) * 6) % 110) - 5;
   const slide = Math.sin(tau * (0.12 + r3 * 0.08) + r2 * 5) * (18 + r1 * 14);
   return (
-    <div
+    <motion.div
       style={{
         position: 'absolute',
         left: '-15%',
@@ -281,7 +208,6 @@ const SkyHazeBand = ({ seed, progress }) => {
   );
 };
 
-// Tiny drifting dust motes for ambient sun atmosphere
 const DustMote = ({ seed, progress }) => {
   const baseX = exposeRand(seed, 1) * 100;
   const baseY = exposeRand(seed, 2) * 100;
@@ -294,7 +220,7 @@ const DustMote = ({ seed, progress }) => {
     + Math.cos(tau * speed * 0.63 + phase) * 14;
   const size = 2 + exposeRand(seed, 5) * 3;
   return (
-    <div style={{
+    <motion.div style={{
       position: 'absolute',
       left: `${baseX}%`,
       top: `${baseY}%`,

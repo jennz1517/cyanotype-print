@@ -295,8 +295,8 @@ const BotanicalTray = ({ onPickup, layout = 'column', orientation, strip, header
       gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
       gridTemplateRows: 'auto',
       gridAutoRows: `${TRAY_GRID_CARD_HEIGHT}px`,
-      gap: 10,
-      padding: '10px 12px 12px',
+      gap: sideRail ? 16 : 10,
+      padding: sideRail ? 24 : '10px 12px 12px',
       alignContent: 'start',
       width: '100%',
       boxSizing: 'border-box',
@@ -513,13 +513,13 @@ const PlacedItem = ({ item, selected, onSelect, onUpdate, onDelete, disabled, di
         width: w, height: h,
         transform: `rotate(${item.rotation}deg)`,
         cursor: disabled ? 'default' : 'grab',
+        zIndex: selected ? 20 : 1,
       }}
     >
       <div style={{
         width: '100%', height: '100%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         pointerEvents: 'auto',
-        filter: `drop-shadow(3px 3px 0 rgba(0,0,0,${item.pressed ? 0.12 : 0.22}))`,
       }}>
         <BotanicalSVG kind={item.kind} size={item.scale} color="#000000"/>
       </div>
@@ -610,9 +610,15 @@ const PlacedItem = ({ item, selected, onSelect, onUpdate, onDelete, disabled, di
 
 // The paper surface — where items are dropped & arranged.
 // In later phases this paper becomes the print canvas, so we use refs.
-const ArrangePhase = ({ items, setItems, paperTone, onExpose, onReady, ghost, bottomChromePx = 0, inlineLayout = false }) => {
-  const [selectedId, setSelectedId] = React.useState(null);
+const ArrangePhase = ({
+  items, setItems, paperTone, onExpose, onReady, ghost, bottomChromePx = 0, inlineLayout = false,
+  selectedId = null, onSelectedIdChange,
+}) => {
   const paperRef = React.useRef(null);
+  /** Swallow one empty-paper deselect after tray drop (synthetic mousedown on release). */
+  const blockDeselectOnceRef = React.useRef(false);
+  const pendingSelectRef = React.useRef(null);
+  const setSelectedId = onSelectedIdChange || (() => {});
   const scale = React.useContext(window.ScaleContext || React.createContext(1));
   const layout = React.useContext(window.LayoutTierContext || React.createContext({ tier: 'xl', compactArrangeChrome: false }));
   const contentCenterX = inlineLayout ? null : React.useContext(window.ArrangeHCenterContext || React.createContext(null));
@@ -633,12 +639,26 @@ const ArrangePhase = ({ items, setItems, paperTone, onExpose, onReady, ghost, bo
     if (x < 0 || x > PAPER_W || y < 0 || y > PAPER_H) return null;
     const id = 'item-' + Math.random().toString(36).slice(2, 9);
     setItems((prev) => [...prev, { id, kind, x, y, rotation: 0, scale: 0.8 + Math.random() * 0.3 }]);
+    pendingSelectRef.current = id;
     setSelectedId(id);
+    blockDeselectOnceRef.current = true;
+    window.setTimeout(() => { blockDeselectOnceRef.current = false; }, 250);
     SoundManager.rustle();
     return id;
   };
-  // Expose for ghost drop
-  React.useEffect(() => { ArrangePhase._addItem = addItem; });
+  const addItemRef = React.useRef(addItem);
+  addItemRef.current = addItem;
+  React.useLayoutEffect(() => {
+    ArrangePhase._addItem = (...args) => addItemRef.current(...args);
+    return () => { ArrangePhase._addItem = null; };
+  });
+  React.useLayoutEffect(() => {
+    const pending = pendingSelectRef.current;
+    if (!pending) return;
+    if (!items.some((it) => it.id === pending)) return;
+    setSelectedId(pending);
+    pendingSelectRef.current = null;
+  }, [items, setSelectedId]);
 
   const updateItem = (id, patch) => {
     setItems((prev) => prev.map(it => it.id === id ? { ...it, ...patch } : it));
@@ -662,19 +682,23 @@ const ArrangePhase = ({ items, setItems, paperTone, onExpose, onReady, ghost, bo
   }, [selectedId, deleteItem]);
 
   const onPaperMouseDown = (e) => {
-    // clicked empty paper — deselect
+    if (blockDeselectOnceRef.current) {
+      blockDeselectOnceRef.current = false;
+      return;
+    }
     if (e.target === paperRef.current || e.target.dataset.paper === 'bg') {
       setSelectedId(null);
     }
   };
 
+  const clipPaper = inlineLayout;
   return (
     <motion.div style={{
       position: 'relative',
       width: '100%',
       height: '100%',
       minHeight: 0,
-      overflow: 'visible',
+      overflow: clipPaper ? 'hidden' : 'visible',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'stretch',
@@ -683,6 +707,7 @@ const ArrangePhase = ({ items, setItems, paperTone, onExpose, onReady, ghost, bo
         flex: 1,
         minHeight: 0,
         position: 'relative',
+        overflow: clipPaper ? 'hidden' : 'visible',
       }}>
         <motion.div style={{
           position: 'absolute',
@@ -695,6 +720,7 @@ const ArrangePhase = ({ items, setItems, paperTone, onExpose, onReady, ghost, bo
           alignItems: 'center',
           justifyContent: 'center',
           maxWidth: '100%',
+          overflow: clipPaper ? 'hidden' : 'visible',
         }}>
         <motion.div
           ref={paperRef}

@@ -32,6 +32,8 @@ const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange
   const rafRef = React.useRef(0);
   const onCompleteRef = React.useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const onFooterChangeRef = React.useRef(onFooterChange);
+  onFooterChangeRef.current = onFooterChange;
   const rinseStartedRef = React.useRef(false);
   const liftOffReportedRef = React.useRef(false);
 
@@ -70,7 +72,8 @@ const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange
   }, [t]);
 
   React.useEffect(() => {
-    if (!onFooterChange) return;
+    const setFooter = onFooterChangeRef.current;
+    if (!setFooter) return;
     let status = '> Lift specimens to reveal the latent print';
     let action = null;
     if (!liftStarted) {
@@ -81,9 +84,13 @@ const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange
     } else {
       status = '> Lifting specimens…';
     }
-    onFooterChange({ status, action });
-    return () => onFooterChange(null);
-  }, [onFooterChange, liftStarted, t, startLift, handleRinse]);
+    setFooter({ status, action });
+  }, [liftStarted, t, startLift, handleRinse]);
+
+  React.useEffect(() => () => {
+    const setFooter = onFooterChangeRef.current;
+    if (setFooter) setFooter(null);
+  }, []);
 
   // All specimens share the same motion window (no stagger).
   const raw =

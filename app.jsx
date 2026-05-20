@@ -107,7 +107,6 @@ const DragGhost = ({ kind, x, y }) => {
       zIndex: 10000,
       transform: 'translate(-50%, -50%)',
       opacity: 0.85,
-      filter: 'drop-shadow(4px 4px 0 rgba(0,0,0,0.25))',
     }}>
       <div style={{transform: `scale(${s})`, transformOrigin: 'center'}}>
         <BotanicalSVG kind={kind} color="#000000"/>
@@ -156,6 +155,7 @@ const App = () => {
   }, [phase]);
   const [trayOverlayState, setTrayOverlayState] = React.useState('shown'); // shown | exiting | hidden
   const [items, setItems] = React.useState([]);
+  const [selectedItemId, setSelectedItemId] = React.useState(null);
   const [printVariationSeed, setPrintVariationSeed] = React.useState(
     () => (Math.random() * 0xffffffff) >>> 0,
   );
@@ -208,12 +208,27 @@ const App = () => {
   const handlePickup = (kind, x, y) => {
     setDrag({ kind, x, y });
   };
+  const swallowPostDropPointer = React.useCallback(() => {
+    const stop = (ev) => { ev.stopPropagation(); };
+    const kinds = ['pointerdown', 'mousedown'];
+    const cleanup = () => {
+      for (const k of kinds) window.removeEventListener(k, stop, true);
+    };
+    for (const k of kinds) window.addEventListener(k, stop, true);
+    requestAnimationFrame(cleanup);
+    setTimeout(cleanup, 0);
+  }, []);
   React.useEffect(() => {
     if (!drag) return;
     const onMove = (e) => setDrag(d => d ? { ...d, x: e.clientX, y: e.clientY } : null);
     const onUp = (e) => {
-      // Attempt drop
-      if (ArrangePhase._addItem) ArrangePhase._addItem(drag.kind, e.clientX, e.clientY);
+      const id = ArrangePhase._addItem
+        ? ArrangePhase._addItem(drag.kind, e.clientX, e.clientY)
+        : null;
+      if (id) {
+        setSelectedItemId(id);
+        swallowPostDropPointer();
+      }
       setDrag(null);
     };
     window.addEventListener('mousemove', onMove);
@@ -222,7 +237,7 @@ const App = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [drag]);
+  }, [drag, swallowPostDropPointer]);
 
   const trayBandAtExposeStartRef = React.useRef(ARRANGE_BOTTOM_TRAY_ESTIMATE_PX);
   const [exposeTransitionInsetPx, setExposeTransitionInsetPx] = React.useState(0);
@@ -326,17 +341,23 @@ const App = () => {
     requestAnimationFrame(() => runTrayExitAnimation(bottomExit));
   };
   const [brushLiftComplete, setBrushLiftComplete] = React.useState(false);
-  const onExposeComplete = () => {
+  const [exposeProgress, setExposeProgress] = React.useState(0);
+  const [exposeSkipRequested, setExposeSkipRequested] = React.useState(false);
+  const exposeSkipRef = React.useRef(null);
+  const exposeSkipRequestedRef = React.useRef(false);
+  exposeSkipRequestedRef.current = exposeSkipRequested;
+  const onExposeComplete = React.useCallback(() => {
     setBrushLiftComplete(false);
     setPhase('brush');
-  };
+  }, []);
   const onBrushLiftSpecimensOff = React.useCallback(() => setBrushLiftComplete(true), []);
-  const onBrushComplete = () => setPhase('rinse');
-  const onRinseComplete = () => setPhase('reveal');
+  const onBrushComplete = React.useCallback(() => setPhase('rinse'), []);
+  const onRinseComplete = React.useCallback(() => setPhase('reveal'), []);
 
   const onNew = () => {
     if (trayExitRafRef.current) cancelAnimationFrame(trayExitRafRef.current);
     setItems([]);
+    setSelectedItemId(null);
     setTrayOverlayState('shown');
     setExitTraySnapshot(null);
     setFooterExitBand(null);
@@ -350,6 +371,7 @@ const App = () => {
   const onDevPhaseExit = React.useCallback(() => {
     if (trayExitRafRef.current) cancelAnimationFrame(trayExitRafRef.current);
     setItems([]);
+    setSelectedItemId(null);
     setTrayOverlayState('shown');
     setExitTraySnapshot(null);
     setFooterExitBand(null);
@@ -363,6 +385,67 @@ const App = () => {
     if (phase === 'arrange') setStepperPhase('arrange');
     else if (phase !== 'expose') setStepperPhase(phase);
   }, [phase]);
+
+  React.useEffect(() => {
+    if (phase !== 'expose') {
+      setExposeProgress(0);
+      setExposeSkipRequested(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timerId = 0;
+    let skipTimerId = 0;
+    const duration = 7000;
+    let t0 = performance.now();
+    let skipFrom = 0;
+    const sunDrone = SoundManager.sunDrone();
+
+    const tick = () => {
+      if (cancelled) return;
+      const p = Math.min(1, (performance.now() - t0) / duration);
+      setExposeProgress(p);
+      if (p >= 1) {
+        clearInterval(timerId);
+        setTimeout(() => {
+          if (!cancelled) onExposeComplete();
+        }, 800);
+      }
+    };
+
+    exposeSkipRef.current = () => {
+      if (cancelled || exposeSkipRequestedRef.current) return;
+      setExposeSkipRequested(true);
+      skipFrom = Math.min(1, (performance.now() - t0) / duration);
+      clearInterval(timerId);
+      const skipT0 = performance.now();
+      const skipDur = 1200;
+      skipTimerId = setInterval(() => {
+        if (cancelled) return;
+        const k = Math.min(1, (performance.now() - skipT0) / skipDur);
+        const p = skipFrom + (1 - skipFrom) * k;
+        setExposeProgress(p);
+        if (k >= 1) {
+          clearInterval(skipTimerId);
+          setTimeout(() => {
+            if (!cancelled) onExposeComplete();
+          }, 400);
+        }
+      }, 50);
+    };
+
+    setExposeProgress(0);
+    timerId = setInterval(tick, 50);
+    tick();
+
+    return () => {
+      cancelled = true;
+      clearInterval(timerId);
+      clearInterval(skipTimerId);
+      exposeSkipRef.current = null;
+      if (sunDrone) sunDrone.stop();
+    };
+  }, [phase, onExposeComplete]);
 
   const onSave = async (paperEl) => {
     // Render the paper element to a PNG via canvas by rasterizing its visual layers.
@@ -423,11 +506,28 @@ const App = () => {
   });
   const useArrangeGridLayout = phase === 'arrange';
   const showPhaseFooter = phase === 'arrange' || phase === 'expose' || phase === 'brush' || phase === 'rinse' || phase === 'reveal';
-  const [phaseFooter, setPhaseFooter] = React.useState(null);
+  const [phaseFooter, setPhaseFooterState] = React.useState(null);
+  const setPhaseFooter = React.useCallback((next) => {
+    setPhaseFooterState((prev) => {
+      if (next == null) return prev == null ? prev : null;
+      if (prev == null) return next;
+      const prevAct = prev.action || (prev.actions && prev.actions[0]);
+      const nextAct = next.action || (next.actions && next.actions[0]);
+      if (
+        prev.status === next.status
+        && prevAct?.label === nextAct?.label
+        && !!prevAct?.disabled === !!nextAct?.disabled
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, []);
   const phaseFooterActions = phaseFooter?.actions?.length
     ? phaseFooter.actions
     : (phaseFooter?.action ? [phaseFooter.action] : []);
-  const showFooterActionColumn = phase === 'arrange' || phaseFooterActions.length > 0;
+  const showFooterActionColumn = phase === 'arrange' || phase === 'expose' || phaseFooterActions.length > 0;
+  const exposeElapsedSec = Math.floor(exposeProgress * 7);
   const arrangeStacked = useArrangeGridLayout && layout.vw < 900;
   const shellRef = React.useRef(null);
 
@@ -586,6 +686,8 @@ const App = () => {
             }}>
               <aside ref={gridAsideRef} style={{
                 order: arrangeStacked ? 1 : 0,
+                zIndex: arrangeStacked ? 1 : undefined,
+                position: arrangeStacked ? 'relative' : undefined,
                 width: (trayExiting && exitTraySnapshot && !exitTraySnapshot.portaledOnly && !arrangeStacked)
                   ? `min(${Math.max(0, ARRANGE_TRAY_COL_PX * (1 - trayExitEased))}px, ${Math.max(0, 36 * (1 - trayExitEased))}%)`
                   : (arrangeStacked ? '100%' : `min(${ARRANGE_TRAY_COL_PX}px, 36%)`),
@@ -634,11 +736,19 @@ const App = () => {
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
+                zIndex: arrangeStacked ? 0 : undefined,
               }}>
-                <motion.div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'visible' }}>
+                <motion.div style={{
+                  flex: 1,
+                  minHeight: 0,
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}>
                   <ArrangePhase
                     items={items}
                     setItems={setItems}
+                    selectedId={selectedItemId}
+                    onSelectedIdChange={setSelectedItemId}
                     paperTone={paperTone}
                     inlineLayout={true}
                   />
@@ -650,8 +760,7 @@ const App = () => {
             <ExposePhase
               items={items}
               paperTone={paperTone}
-              onComplete={onExposeComplete}
-              onFooterChange={setPhaseFooter}
+              progress={exposeProgress}
               trayBandHeight={0}
             />
           )}
@@ -734,13 +843,26 @@ const App = () => {
                 ? '> No specimens placed. Drag from tray.'
                 : `> ${items.length} specimen${items.length === 1 ? '' : 's'} on paper.`
             )}
-            {phase !== 'arrange' && (phaseFooter?.status ?? '')}
+            {phase === 'expose' && (
+              `> Exposing to sunlight · ${String(exposeElapsedSec).padStart(2, '0')}s · ${Math.round(exposeProgress * 100)}%`
+            )}
+            {phase !== 'arrange' && phase !== 'expose' && (phaseFooter?.status ?? '')}
           </div>
           {showFooterActionColumn && (
             <div style={{ padding: '12px 10px 8px', display: 'flex', alignItems: 'stretch', gap: 8 }}>
               {phase === 'arrange' && (
                 <InkButton onClick={toExpose} disabled={items.length === 0 || trayExiting} style={{ minWidth: 200, alignSelf: 'stretch' }}>
                   Expose to sun →
+                </InkButton>
+              )}
+              {phase === 'expose' && (
+                <InkButton
+                  onClick={() => exposeSkipRef.current?.()}
+                  disabled={exposeSkipRequested}
+                  variant="secondary"
+                  style={{ minWidth: 200, alignSelf: 'stretch' }}
+                >
+                  {exposeSkipRequested ? 'Speeding up…' : 'Speed up'}
                 </InkButton>
               )}
               {phaseFooterActions.map((act, i) => (
