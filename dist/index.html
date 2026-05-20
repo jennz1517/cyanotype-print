@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Cyanotype Print</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #ffffff;
+    font-family: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #000000;
+  }
+  button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #f7f7f7; }
+  ::-webkit-scrollbar-thumb { background: #000000; }
+  /* Native scrollbars hidden — specimen tray uses square custom thumbs (SpecimenTrayScroll). */
+  .specimen-tray-scroll {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  .specimen-tray-scroll::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    background: transparent !important;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="motion.jsx"></script>
+<script type="text/babel" src="ornaments.jsx"></script>
+<script type="text/babel" src="sound.jsx"></script>
+<script type="text/babel" src="botanicals.jsx"></script>
+<script type="text/babel" src="cyanotypeBackground.jsx"></script>
+<script type="text/babel" src="layoutTier.jsx"></script>
+<script type="text/babel" src="arrange.jsx"></script>
+<script type="text/babel" src="expose.jsx"></script>
+<script type="text/babel" src="brushAside.jsx"></script>
+<script type="text/babel" src="rinse.jsx"></script>
+<script type="text/babel" src="reveal.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+<script type="text/babel">
+  const mount = () => {
+    if (!window.App) { setTimeout(mount, 50); return; }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  };
+  mount();
+</script>
+</body>
+</html>
