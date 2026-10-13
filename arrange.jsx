@@ -14,6 +14,34 @@ const PAPER_SCREEN_SHIFT_PX = 48;
 const COMPACT_EXPOSE_BTN_CLEAR_PAPER_PX = 160;
 // Inner margin inside paper where items live
 const PAPER_MARGIN = 40;
+/** Minimum fraction of a placed item that must overlap the paper (max 3/4 off-page). */
+const MIN_ON_PAPER_FRAC = 0.25;
+
+/** Axis-aligned half-extents of a placed item (accounts for rotation). */
+const getPlacedItemHalfExtents = (item) => {
+  const b = BOTANICALS[item.kind];
+  if (!b) return { halfX: 0, halfY: 0 };
+  const w = b.bounds.w * item.scale;
+  const h = b.bounds.h * item.scale;
+  const rad = ((item.rotation || 0) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  return {
+    halfX: (w * cos + h * sin) / 2,
+    halfY: (w * sin + h * cos) / 2,
+  };
+};
+
+/** Clamp item center so at least MIN_ON_PAPER_FRAC of its bounds stays on the paper. */
+const clampPlacedItemPosition = (item) => {
+  const { halfX, halfY } = getPlacedItemHalfExtents(item);
+  const minVisibleX = 2 * halfX * MIN_ON_PAPER_FRAC;
+  const minVisibleY = 2 * halfY * MIN_ON_PAPER_FRAC;
+  return {
+    x: Math.max(-halfX + minVisibleX, Math.min(PAPER_W + halfX - minVisibleX, item.x)),
+    y: Math.max(-halfY + minVisibleY, Math.min(PAPER_H + halfY - minVisibleY, item.y)),
+  };
+};
 
 // Renders a botanical. Two modes:
 //   - photo (default): shows the real pressed-flower image for image-backed kinds
@@ -36,21 +64,37 @@ const BotanicalSVG = ({ kind, size = 1, color = "#000000", asSilhouette = false,
         : window.CYANOTYPE_THIN_RGB01;
       const curveOpts = { lumLift: b.lumLift, lumContrast: b.lumContrast, filterProfile: b.filterProfile };
       const filterHtml = window.cyanotypeNegativeFilterMarkup(fid, negRgb, thinRgb, curveOpts);
+      // SVG filters rasterize at the element's CSS size. Render 2× then scale down so
+      // ancestor paper/stage transforms stay sharp instead of upscaling a 1× bitmap.
+      const filterScale = 2;
+      const dw = w * size;
+      const dh = h * size;
       return (
-        <svg
-          width={w * size} height={h * size}
-          viewBox={`0 0 ${w} ${h}`}
-          style={{display: 'block', overflow: 'visible'}}
-        >
-          <defs dangerouslySetInnerHTML={{ __html: filterHtml }}/>
-          <image
-            href={b.image}
-            x="0" y="0"
-            width={w} height={h}
-            preserveAspectRatio="xMidYMid meet"
-            filter={`url(#${fid})`}
-          />
-        </svg>
+        <div style={{ width: dw, height: dh, position: 'relative', overflow: 'visible' }}>
+          <svg
+            width={dw * filterScale}
+            height={dh * filterScale}
+            viewBox={`0 0 ${w} ${h}`}
+            style={{
+              display: 'block',
+              overflow: 'visible',
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              transform: `scale(${1 / filterScale})`,
+              transformOrigin: 'top left',
+            }}
+          >
+            <defs dangerouslySetInnerHTML={{ __html: filterHtml }}/>
+            <image
+              href={b.image}
+              x="0" y="0"
+              width={w} height={h}
+              preserveAspectRatio="xMidYMid meet"
+              filter={`url(#${fid})`}
+            />
+          </svg>
+        </div>
       );
     }
     return (
@@ -623,11 +667,12 @@ const ArrangePhase = ({
   const layout = React.useContext(window.LayoutTierContext || React.createContext({ tier: 'xl', compactArrangeChrome: false }));
   const contentCenterX = inlineLayout ? null : React.useContext(window.ArrangeHCenterContext || React.createContext(null));
   const viewportH = typeof window !== 'undefined' ? window.innerHeight : layout.vh;
+  const paperBottomInsetPx = layout.arrangePaperBottomInsetPx ?? 0;
   const displayScale = window.getPhasePaperDisplayScale
-    ? window.getPhasePaperDisplayScale(scale, viewportH)
+    ? window.getPhasePaperDisplayScale(scale, viewportH, paperBottomInsetPx)
     : (window.PHASE_PAPER_DISPLAY_BOOST || 1.14);
   const paperTopOffset = window.getPhasePaperTopOffset
-    ? window.getPhasePaperTopOffset(scale)
+    ? window.getPhasePaperTopOffset(scale, paperBottomInsetPx)
     : (PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / Math.max(scale || 1, 0.001)));
   // Add new item from tray drop
   const addItem = (kind, clientX, clientY) => {
@@ -661,7 +706,12 @@ const ArrangePhase = ({
   }, [items, setSelectedId]);
 
   const updateItem = (id, patch) => {
-    setItems((prev) => prev.map(it => it.id === id ? { ...it, ...patch } : it));
+    setItems((prev) => prev.map((it) => {
+      if (it.id !== id) return it;
+      const next = { ...it, ...patch };
+      const { x, y } = clampPlacedItemPosition(next);
+      return { ...next, x, y };
+    }));
   };
   const deleteItem = React.useCallback((id) => {
     setItems((prev) => prev.filter(it => it.id !== id));
@@ -690,6 +740,32 @@ const ArrangePhase = ({
       setSelectedId(null);
     }
   };
+
+  const isDraggingFromTray = !!ghost?.kind;
+  const [dropOverPaper, setDropOverPaper] = React.useState(false);
+  React.useLayoutEffect(() => {
+    if (!isDraggingFromTray || !ghost || !paperRef.current) {
+      setDropOverPaper(false);
+      return;
+    }
+    const b = BOTANICALS[ghost.kind];
+    if (!b) {
+      setDropOverPaper(false);
+      return;
+    }
+    const paperRect = paperRef.current.getBoundingClientRect();
+    const s = Math.min(180 / b.bounds.w, 220 / b.bounds.h);
+    const halfW = (b.bounds.w * s) / 2;
+    const halfH = (b.bounds.h * s) / 2;
+    const ghostLeft = ghost.x - halfW;
+    const ghostTop = ghost.y - halfH;
+    const ghostRight = ghost.x + halfW;
+    const ghostBottom = ghost.y + halfH;
+    setDropOverPaper(
+      ghostRight > paperRect.left && ghostLeft < paperRect.right
+      && ghostBottom > paperRect.top && ghostTop < paperRect.bottom,
+    );
+  }, [isDraggingFromTray, ghost?.kind, ghost?.x, ghost?.y]);
 
   const clipPaper = inlineLayout;
   return (
@@ -737,12 +813,64 @@ const ArrangePhase = ({
             background: paperTone.base,
             backgroundImage: paperTone.texture,
             boxShadow: 'none',
-            border: border(UI().line),
-            cursor: 'default',
+            border: dropOverPaper
+              ? `${UI().lineWidth}px solid transparent`
+              : border(UI().line),
+            cursor: dropOverPaper ? 'copy' : 'default',
           }}
         >
+      {/* Drop-target overlay — only when dragged specimen overlaps the paper */}
+      {dropOverPaper && (
+        <>
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: 0,
+              boxSizing: 'border-box',
+              border: `2px dotted ${UI().line}`,
+              pointerEvents: 'none',
+              zIndex: 42,
+            }}
+          />
+          <div
+            data-paper="bg"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              zIndex: 40,
+              background: 'rgba(0,0,0,0.05)',
+            }}
+          />
+          {items.length === 0 && (
+            <div
+              data-paper="bg"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                textAlign: 'center',
+                color: UI().fg,
+                fontFamily: UI().font,
+                fontSize: 14,
+                fontWeight: 600,
+                letterSpacing: '0.16em',
+                textTransform: 'uppercase',
+                pointerEvents: 'none',
+                zIndex: 41,
+              }}
+            >
+              Release to place
+            </div>
+          )}
+        </>
+      )}
+
       {/* Empty state hint */}
-      {items.length === 0 && (
+      {items.length === 0 && !isDraggingFromTray && (
         <div style={{
           position: 'absolute', left: 0, right: 0, top: '50%',
           transform: 'translateY(-50%)',

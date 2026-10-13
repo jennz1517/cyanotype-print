@@ -20,12 +20,12 @@ const LIFT_ANIM_START = 0.06;
 const LIFT_ANIM_SPAN = 0.4;
 /** Normalized time (0..1) when specimen motion reaches the edge (matches raw === 1 below). */
 const LIFT_SPECIMENS_OFF_T = LIFT_ANIM_START + LIFT_ANIM_SPAN;
-const RINSE_VISIBLE_T = LIFT_SPECIMENS_OFF_T + (1000 / LIFT_TOTAL_MS);
+const RINSE_VISIBLE_T = LIFT_SPECIMENS_OFF_T + (220 / LIFT_TOTAL_MS);
 const PHASE_PAPER_DISPLAY_BOOST = 1.14;
 const PAPER_TOP_BASE = 16;
 const PAPER_SCREEN_SHIFT_PX = 48;
 
-const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange, trayBandHeight = 0 }) => {
+const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange, onFooterClicks, trayBandHeight = 0 }) => {
   const stageScale = React.useContext(window.ScaleContext || React.createContext(1)) || 1;
   const [liftStarted, setLiftStarted] = React.useState(false);
   const [t, setT] = React.useState(0);
@@ -34,6 +34,8 @@ const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange
   onCompleteRef.current = onComplete;
   const onFooterChangeRef = React.useRef(onFooterChange);
   onFooterChangeRef.current = onFooterChange;
+  const onFooterClicksRef = React.useRef(onFooterClicks);
+  onFooterClicksRef.current = onFooterClicks;
   const rinseStartedRef = React.useRef(false);
   const liftOffReportedRef = React.useRef(false);
 
@@ -60,44 +62,66 @@ const BrushAsidePhase = ({ items, onComplete, onLiftSpecimensOff, onFooterChange
     return () => cancelAnimationFrame(rafRef.current);
   }, [liftStarted]);
 
+  const tRef = React.useRef(t);
+  tRef.current = t;
+
   const startLift = React.useCallback(() => {
-    if (liftStarted) return;
     setLiftStarted(true);
-  }, [liftStarted]);
+  }, []);
 
   const handleRinse = React.useCallback(() => {
-    if (rinseStartedRef.current || t < RINSE_VISIBLE_T) return;
+    if (rinseStartedRef.current || tRef.current < RINSE_VISIBLE_T) return;
     rinseStartedRef.current = true;
     onCompleteRef.current();
-  }, [t]);
+  }, []);
+
+  // Bind live click handlers when the footer action mode changes (not every anim frame).
+  const footerMode = !liftStarted ? 'lift' : (t >= RINSE_VISIBLE_T ? 'rinse' : 'lifting');
+  React.useLayoutEffect(() => {
+    const bind = onFooterClicksRef.current;
+    if (!bind) return undefined;
+    if (footerMode === 'lift') bind([startLift]);
+    else if (footerMode === 'rinse') bind([handleRinse]);
+    else bind([]);
+    return () => bind([]);
+  }, [footerMode, startLift, handleRinse]);
 
   React.useEffect(() => {
     const setFooter = onFooterChangeRef.current;
     if (!setFooter) return;
     let status = '> Lift specimens to reveal the latent print';
     let action = null;
-    if (!liftStarted) {
-      action = { label: 'Lift specimens →', onClick: startLift, variant: 'primary' };
-    } else if (t >= RINSE_VISIBLE_T) {
+    if (footerMode === 'lift') {
+      action = { label: 'Lift specimens →', variant: 'primary' };
+    } else if (footerMode === 'rinse') {
       status = '> Rinse with water to reveal the print.';
-      action = { label: 'Rinse →', onClick: handleRinse, variant: 'primary' };
+      action = { label: 'Rinse →', variant: 'primary' };
     } else {
       status = '> Lifting specimens…';
     }
     setFooter({ status, action });
-  }, [liftStarted, t, startLift, handleRinse]);
+  }, [footerMode]);
 
   React.useEffect(() => () => {
     const setFooter = onFooterChangeRef.current;
     if (setFooter) setFooter(null);
+    const bind = onFooterClicksRef.current;
+    if (bind) bind([]);
   }, []);
 
   // All specimens share the same motion window (no stagger).
   const raw =
     t <= LIFT_ANIM_START ? 0 : t >= LIFT_SPECIMENS_OFF_T ? 1 : (t - LIFT_ANIM_START) / LIFT_ANIM_SPAN;
   const e = easeOutCubic(raw);
-  const displayScale = PHASE_PAPER_DISPLAY_BOOST;
-  const paperTopOffset = PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / Math.max(stageScale, 0.001));
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : undefined;
+  const paperLayout = window.getContinuousPhasePaperLayout
+    ? window.getContinuousPhasePaperLayout(stageScale, viewportH)
+    : {
+      displayScale: PHASE_PAPER_DISPLAY_BOOST,
+      paperTopOffset: PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / Math.max(stageScale, 0.001)),
+    };
+  const displayScale = paperLayout.displayScale;
+  const paperTopOffset = paperLayout.paperTopOffset;
   return (
     <motion.div
       style={{

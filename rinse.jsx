@@ -46,6 +46,9 @@ const smoothstep = (edge0, edge1, x) => {
   return t * t * (3 - 2 * t);
 };
 
+/** Gentle S-curve — slow at both ends so color and print resolve without a late snap. */
+const rinseDevelopT = (progress) => smoothstep(0.03, 0.97, progress);
+
 /**
  * Irregular wet front (percent from top of paper) for clip-path — reads like water
  * pooling unevenly as it runs down the sheet.
@@ -69,8 +72,7 @@ const buildWetRegionClipPath = (leadPct, progress, segments = 22) => {
 
 /** Pour phase: how far the wet front has traveled down the paper (0–~102%). */
 const wetFrontPercent = (progress) => {
-  if (progress >= 0.6) return 105;
-  const u = Math.min(1, progress / 0.5);
+  const u = Math.min(1, progress / 0.78);
   return easeOutCubic(u) * 102;
 };
 
@@ -104,7 +106,6 @@ const WaterEddy = ({ seed, progress }) => {
         rgba(205,230,248,0.2) 30%,
         rgba(165,210,240,0.12) 58%,
         transparent 86%)`,
-      filter: 'blur(1.2px)',
       opacity: opacity * (0.35 + run * 0.65),
       pointerEvents: 'none',
     }}/>
@@ -112,18 +113,18 @@ const WaterEddy = ({ seed, progress }) => {
 };
 
 /** Full-paper wash: clipped wet region + shear currents + eddies. */
-const OrganicWaterWash = ({ progress, developT }) => {
+const OrganicWaterWash = ({ progress, developT, opacity = 1 }) => {
+  if (opacity <= 0.004) return null;
   const lead = wetFrontPercent(progress);
   const clip = buildWetRegionClipPath(lead, progress);
   const drift = Math.sin(progress * Math.PI * 4.2) * 8 + Math.sin(progress * 10.8) * 3.8;
-  const shearShift = progress * 130;
-  const turbulenceShift = progress * 95;
   return (
     <div style={{
       position: 'absolute',
       inset: 0,
       pointerEvents: 'none',
       overflow: 'hidden',
+      opacity,
     }}>
       <div style={{
         position: 'absolute',
@@ -138,7 +139,7 @@ const OrganicWaterWash = ({ progress, developT }) => {
           position: 'absolute',
           inset: 0,
           transform: `translate(${drift}px, ${Math.sin(progress * 8) * 1.8}px)`,
-          opacity: 0.34 + developT * 0.22,
+          opacity: (0.34 + developT * 0.22) * Math.min(1, opacity * 1.4),
           background: [
             `linear-gradient(103deg,
               transparent 0%,
@@ -152,33 +153,17 @@ const OrganicWaterWash = ({ progress, developT }) => {
               rgba(145,201,236,0.08) 49%,
               rgba(176,221,248,0.09) 69%,
               rgba(218,240,255,0.06) 100%)`,
-            `repeating-linear-gradient(84deg,
-              transparent 0px,
-              transparent 14px,
-              rgba(255,255,255,0.028) 14px,
-              rgba(255,255,255,0.028) 16px)`,
           ].join(', '),
-          backgroundSize: `100% 100%, 100% 100%, 210px 100%`,
-          backgroundPosition: `0 0, 0 0, ${shearShift}px 0`,
           mixBlendMode: 'screen',
-          filter: 'blur(0.55px)',
         }}/>
         <div style={{
           position: 'absolute',
           inset: 0,
           transform: `translate(${-drift * 0.55}px, ${Math.cos(progress * 7.4) * 1.6}px)`,
           opacity: 0.12 + developT * 0.11,
-          background: [
-            `radial-gradient(ellipse 130% 62% at 52% -8%,
-              rgba(255,255,255,0.24) 0%,
-              transparent 58%)`,
-            `repeating-linear-gradient(11deg,
-              rgba(215,240,255,0.034) 0px,
-              rgba(215,240,255,0.034) 10px,
-              transparent 10px,
-              transparent 22px)`,
-          ].join(', '),
-          backgroundPosition: `0 0, ${-turbulenceShift}px 0`,
+          background: `radial-gradient(ellipse 130% 62% at 52% -8%,
+            rgba(255,255,255,0.24) 0%,
+            transparent 58%)`,
           mixBlendMode: 'soft-light',
           pointerEvents: 'none',
         }}/>
@@ -191,7 +176,6 @@ const OrganicWaterWash = ({ progress, developT }) => {
             transparent 54%)`,
           mixBlendMode: 'screen',
           opacity: 0.3 + (1 - developT) * 0.25,
-          filter: 'blur(1.4px)',
         }}/>
         {Array.from({ length: 18 }).map((_, i) => (
           <WaterEddy key={i} seed={i * 17 + 3} progress={progress} />
@@ -201,15 +185,31 @@ const OrganicWaterWash = ({ progress, developT }) => {
   );
 };
 
-const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFooterChange, trayBandHeight = 0 }) => {
+const RinsePhase = ({
+  items, paperTone, printVariationSeed = 0, complete = false,
+  onComplete, onSave, onNew, onFooterChange, onFooterClicks, trayBandHeight = 0,
+}) => {
   const stageScale = React.useContext(window.ScaleContext || React.createContext(1)) || 1;
-  const [progress, setProgress] = React.useState(0);
-  const duration = 6500;
+  const [progress, setProgress] = React.useState(complete ? 1 : 0);
+  const duration = 7800;
   const startRef = React.useRef(null);
+  const paperRef = React.useRef(null);
   const onFooterChangeRef = React.useRef(onFooterChange);
   onFooterChangeRef.current = onFooterChange;
+  const onFooterClicksRef = React.useRef(onFooterClicks);
+  onFooterClicksRef.current = onFooterClicks;
+  const onCompleteRef = React.useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const onSaveRef = React.useRef(onSave);
+  onSaveRef.current = onSave;
+  const onNewRef = React.useRef(onNew);
+  onNewRef.current = onNew;
 
   React.useEffect(() => {
+    if (complete) {
+      setProgress(1);
+      return undefined;
+    }
     const waterSound = SoundManager.water(duration / 1000);
     const step = (ts) => {
       if (startRef.current == null) startRef.current = ts;
@@ -217,16 +217,15 @@ const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFo
       const p = Math.min(1, elapsed / duration);
       setProgress(p);
       if (p < 1) requestAnimationFrame(step);
-      else setTimeout(onComplete, 600);
+      else onCompleteRef.current();
     };
     requestAnimationFrame(step);
     return () => { if (waterSound) waterSound.stop(); };
   }, []);
 
-  const pouring = progress < 0.62;
   const leadPct = wetFrontPercent(progress);
 
-  const developT = easeInOut(Math.max(0, Math.min(1, (progress - 0.04) / 0.92)));
+  const developT = rinseDevelopT(progress);
   const paperBg = lerpHex(EXPOSED_PAPER_HEX, CYANOTYPE_FINAL_HEX, developT);
 
   const paperSeed = React.useMemo(
@@ -234,73 +233,135 @@ const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFo
     [items, printVariationSeed],
   );
   const paperVariationBg = React.useMemo(
-    () => window.buildCyanotypePaperVariationDataUrl(PAPER_W, PAPER_H, paperSeed),
+    () => window.buildCyanotypePaperVariationDataUrl(PAPER_W * 2, PAPER_H * 2, paperSeed, { spotsOnly: true }),
     [paperSeed],
   );
-  const variationOpacity = smoothstep(0.32, 0.96, developT);
+  const paperGrainStyle = React.useMemo(
+    () => (window.getCyanotypePaperGrainStyle
+      ? window.getCyanotypePaperGrainStyle(paperSeed, { opacity: 0.13 })
+      : null),
+    [paperSeed],
+  );
+  // Variation and grain track developT from the start so the sheet never “pops” blue at the end.
+  const variationOpacity = smoothstep(0.06, 0.88, developT);
+  const grainOpacity = smoothstep(0.12, 0.92, developT);
 
   // Latent eases out; paper lerps throughout so the sheet never “empties” to a pale wash.
-  const latentOpacity = 1 - smoothstep(0.04, 0.82, developT);
+  const latentOpacity = 1 - smoothstep(0.04, 0.78, developT);
   // Plus-lighter stacks blow out to white if the whole isolation group is faded — fade per specimen instead.
-  const silhouetteStrength = smoothstep(0.08, 0.98, developT);
+  const silhouetteStrength = smoothstep(0.06, 0.94, developT);
   // Bright cap (cream + darken) tames plus-lighter overlaps; bring it in with silhouettes, not as a late snap.
-  const brightCapOpacity = smoothstep(0.22, 0.96, developT);
+  const brightCapOpacity = smoothstep(0.14, 0.92, developT);
 
-  const speckleOpacity = Math.max(0, 1 - developT);
+  const speckleOpacity = Math.max(0, 1 - smoothstep(0, 0.72, developT));
 
   const glossTop = Math.max(0, Math.min(100, leadPct * 0.96));
-  // Screen gloss was washing the sheet to white; scale by wash progress and cap strength.
-  const glossStrength = 0.14 + developT * 0.12;
-  const displayScale = PHASE_PAPER_DISPLAY_BOOST;
-  const paperTopOffset = PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / Math.max(stageScale, 0.001));
+  // Wet sheen stays with the pour and eases out slowly as the sheet dries.
+  const glossStrength = (0.06 + developT * 0.08) * (1 - smoothstep(0.62, 0.96, progress));
+  // Water visuals fade out gradually — no hard cut when the pour “ends”.
+  const waterWashOpacity = 1 - smoothstep(0.52, 0.9, progress);
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : undefined;
+  const paperLayout = window.getContinuousPhasePaperLayout
+    ? window.getContinuousPhasePaperLayout(stageScale, viewportH)
+    : {
+      displayScale: PHASE_PAPER_DISPLAY_BOOST,
+      paperTopOffset: PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / Math.max(stageScale, 0.001)),
+    };
+  const displayScale = paperLayout.displayScale;
+  const paperTopOffset = paperLayout.paperTopOffset;
+
+  const onNewClick = React.useCallback(() => onNewRef.current?.(), []);
+  const onSaveClick = React.useCallback(() => onSaveRef.current?.(paperRef.current), []);
+
+  React.useLayoutEffect(() => {
+    const bind = onFooterClicksRef.current;
+    if (!bind) return undefined;
+    if (complete) bind([onNewClick, onSaveClick]);
+    else bind([]);
+    return () => bind([]);
+  }, [complete, onNewClick, onSaveClick]);
 
   React.useEffect(() => {
     const setFooter = onFooterChangeRef.current;
     if (!setFooter) return;
+    if (complete) {
+      setFooter({
+        status: '> Print complete',
+        actions: [
+          { label: 'New print', variant: 'secondary' },
+          { label: 'Save as image', variant: 'primary' },
+        ],
+      });
+      return;
+    }
     setFooter({
       status: `> Rinsing print · ${Math.round(progress * 100)}%`,
     });
-  }, [progress]);
+  }, [complete, progress]);
 
   React.useEffect(() => () => {
     const setFooter = onFooterChangeRef.current;
     if (setFooter) setFooter(null);
+    const bind = onFooterClicksRef.current;
+    if (bind) bind([]);
   }, []);
 
   return (
     <div style={{
       position: 'relative',
-      width: '100%', height: '100%',
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      width: '100%',
+      height: '100%',
+      minHeight: 0,
+      minWidth: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      boxSizing: 'border-box',
       background: 'transparent',
       overflow: 'visible',
     }}>
-      <div data-paper="true" style={{
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+      }}>
+        <div style={{ position: 'relative', pointerEvents: 'auto', isolation: 'isolate' }}>
+      <div style={{
         position: 'relative',
         top: paperTopOffset,
+        width: PAPER_W,
+        height: PAPER_H,
+      }}>
+      <div data-paper="true" ref={paperRef} style={{
+        position: 'absolute',
+        inset: 0,
         zIndex: 1,
-        width: PAPER_W, height: PAPER_H,
         background: paperTone.base,
         boxShadow: 'none',
         border: '1px solid #000000',
         overflow: 'hidden',
-        transform: `scale(${displayScale})`,
+        transform: `scale(${displayScale}) translateZ(0)`,
         transformOrigin: 'top center',
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
       }}>
         <div style={{
           position: 'absolute', inset: 0,
           background: paperBg,
         }}/>
 
-        {variationOpacity > 0.004 && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            opacity: variationOpacity,
-            backgroundImage: `url(${paperVariationBg})`,
-            backgroundSize: '100% 100%',
-            pointerEvents: 'none',
-          }}/>
-        )}
+        <div style={{
+          position: 'absolute', inset: 0,
+          opacity: variationOpacity,
+          backgroundImage: `url(${paperVariationBg})`,
+          backgroundSize: '100% 100%',
+          pointerEvents: 'none',
+        }}/>
 
         {speckleOpacity > 0.02 && (
           <div style={{
@@ -372,25 +433,46 @@ const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFo
           }}/>
         </div>
 
-        <div style={{
-          position: 'absolute', inset: 0,
-          opacity: glossStrength,
-          background: `linear-gradient(180deg,
-            rgba(200,220,240,0) 0%,
-            rgba(200,220,240,0.35) ${glossTop - 8}%,
-            rgba(200,220,240,0.5) ${glossTop}%,
-            rgba(200,220,240,0.12) ${Math.min(100, glossTop + 18)}%,
-            transparent ${Math.min(100, glossTop + 35)}%)`,
-          mixBlendMode: 'screen',
-          pointerEvents: 'none',
-        }}/>
-
-        {pouring && (
-          <OrganicWaterWash progress={progress} developT={developT} />
+        {paperGrainStyle && (
+          <div style={{
+            ...paperGrainStyle,
+            opacity: (paperGrainStyle.opacity || 0.13) * grainOpacity,
+          }}/>
         )}
       </div>
 
-      {pouring && (
+        {waterWashOpacity > 0.004 && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 2,
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            transform: `scale(${displayScale})`,
+            transformOrigin: 'top center',
+          }}>
+            {glossStrength > 0.004 && (
+              <div style={{
+                position: 'absolute', inset: 0,
+                opacity: glossStrength,
+                background: `linear-gradient(180deg,
+                  rgba(200,220,240,0) 0%,
+                  rgba(200,220,240,0.35) ${glossTop - 8}%,
+                  rgba(200,220,240,0.5) ${glossTop}%,
+                  rgba(200,220,240,0.12) ${Math.min(100, glossTop + 18)}%,
+                  transparent ${Math.min(100, glossTop + 35)}%)`,
+                mixBlendMode: 'screen',
+                pointerEvents: 'none',
+              }}/>
+            )}
+            <OrganicWaterWash progress={progress} developT={developT} opacity={waterWashOpacity} />
+          </div>
+        )}
+      </div>
+        </div>
+      </div>
+
+      {waterWashOpacity > 0.004 && (
         <div style={{
           position: 'absolute',
           zIndex: 0,
@@ -405,9 +487,8 @@ const RinsePhase = ({ items, paperTone, printVariationSeed = 0, onComplete, onFo
             `linear-gradient(172deg, rgba(220,240,255,0.06) 0%, rgba(170,208,236,0.12) 48%, rgba(210,235,252,0.06) 100%)`,
           ].join(', '),
           pointerEvents: 'none',
-          filter: 'blur(5px)',
-          mixBlendMode: 'screen',
-          opacity: 0.56,
+          opacity: 0.56 * waterWashOpacity,
+          transition: 'opacity 120ms linear',
         }}/>
       )}
 

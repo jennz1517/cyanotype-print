@@ -40,12 +40,14 @@ const ExposePhase = ({ items, paperTone, progress = 0, reducedMotion, trayBandHe
 
   const trayPad = trayBandHeight || 0;
   const viewportH = typeof window !== 'undefined' ? window.innerHeight : undefined;
-  const displayScale = window.getPhasePaperDisplayScale
-    ? window.getPhasePaperDisplayScale(stageScale, viewportH)
-    : (window.PHASE_PAPER_DISPLAY_BOOST || 1.14);
-  const paperTopOffset = window.getPhasePaperTopOffset
-    ? window.getPhasePaperTopOffset(stageScale)
-    : 0;
+  const paperLayout = window.getContinuousPhasePaperLayout
+    ? window.getContinuousPhasePaperLayout(stageScale, viewportH)
+    : {
+      displayScale: window.PHASE_PAPER_DISPLAY_BOOST || 1.14,
+      paperTopOffset: 16 - (48 / Math.max(stageScale, 0.001)),
+    };
+  const displayScale = paperLayout.displayScale;
+  const paperTopOffset = paperLayout.paperTopOffset;
 
   return (
     <div

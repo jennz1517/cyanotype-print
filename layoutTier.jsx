@@ -56,18 +56,46 @@ function getExposeEquivalentStageScale(viewportH) {
   return readViewportH(viewportH) / EXPOSE_STAGE_DESIGN_H;
 }
 
+/** Minimum arrange ScaleStage scale (step 1 scroll floor). */
+function getArrangeMinStageScale(bottomInsetPx = 0) {
+  const inset = Math.max(0, bottomInsetPx || 0);
+  return Math.max(0, ARRANGE_SCALE_FLOOR_VH - inset) / EXPOSE_STAGE_DESIGN_H;
+}
+
+/** True when arrange stage scale is clamped above the height-fit scale (scroll mode). */
+function isArrangeStageAtScrollFloor(currentStageScale, bottomInsetPx = 0) {
+  const s = Math.max(currentStageScale, 0);
+  const inset = Math.max(0, bottomInsetPx || 0);
+  const vh = typeof window !== 'undefined' ? window.innerHeight : ARRANGE_SCALE_FLOOR_VH;
+  const natural = Math.max(0, vh - inset) / EXPOSE_STAGE_DESIGN_H;
+  const minScale = getArrangeMinStageScale(bottomInsetPx);
+  return s > natural + 1e-5 && s <= minScale + 1e-5;
+}
+
+/** Viewport height used for arrange paper sizing — frozen at scroll floor when stage scale is clamped. */
+function getArrangeLayoutViewportH(viewportH, currentStageScale, bottomInsetPx = 0) {
+  const vh = readViewportH(viewportH);
+  if (!isArrangeStageAtScrollFloor(currentStageScale, bottomInsetPx)) return vh;
+  const inset = Math.max(0, bottomInsetPx || 0);
+  return Math.max(vh, ARRANGE_SCALE_FLOOR_VH - inset);
+}
+
 /**
  * CSS transform scale on the paper so its screen size matches Expose at the same viewport,
  * compensating for arrange tray inset / shorter arrange canvas height.
+ * When arrange stage scale is at the scroll floor, uses floor viewport height so paper does not keep shrinking.
  */
-function getPhasePaperDisplayScale(currentStageScale, viewportH) {
+function getPhasePaperDisplayScale(currentStageScale, viewportH, bottomInsetPx = 0) {
   const s = Math.max(currentStageScale, 0.001);
-  return (getExposeEquivalentStageScale(viewportH) / s) * PHASE_PAPER_DISPLAY_BOOST;
+  const effectiveVh = getArrangeLayoutViewportH(viewportH, s, bottomInsetPx);
+  return (getExposeEquivalentStageScale(effectiveVh) / s) * PHASE_PAPER_DISPLAY_BOOST;
 }
 
-function getPhasePaperTopOffset(currentStageScale) {
-  const s = Math.max(currentStageScale, 0.001);
-  return PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / s);
+function getPhasePaperTopOffset(currentStageScale, bottomInsetPx = 0) {
+  const layoutScale = isArrangeStageAtScrollFloor(currentStageScale, bottomInsetPx)
+    ? getArrangeMinStageScale(bottomInsetPx)
+    : Math.max(currentStageScale, 0.001);
+  return PAPER_TOP_BASE - (PAPER_SCREEN_SHIFT_PX / layoutScale);
 }
 
 /** Fixed specimen rail width (screen px) — does not shrink with viewport. */
@@ -212,5 +240,14 @@ window.getArrangeStageScalePolicy = getArrangeStageScalePolicy;
 window.ARRANGE_SCALE_FLOOR_VH = ARRANGE_SCALE_FLOOR_VH;
 window.EXPOSE_STAGE_DESIGN_H = EXPOSE_STAGE_DESIGN_H;
 window.PHASE_PAPER_DISPLAY_BOOST = PHASE_PAPER_DISPLAY_BOOST;
+window.getArrangeMinStageScale = getArrangeMinStageScale;
+window.isArrangeStageAtScrollFloor = isArrangeStageAtScrollFloor;
+window.getArrangeLayoutViewportH = getArrangeLayoutViewportH;
 window.getPhasePaperDisplayScale = getPhasePaperDisplayScale;
 window.getPhasePaperTopOffset = getPhasePaperTopOffset;
+window.getContinuousPhasePaperLayout = function getContinuousPhasePaperLayout(stageScale, viewportH, bottomInsetPx = 0) {
+  return {
+    displayScale: getPhasePaperDisplayScale(stageScale, viewportH, bottomInsetPx),
+    paperTopOffset: getPhasePaperTopOffset(stageScale, bottomInsetPx),
+  };
+};

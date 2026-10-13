@@ -17,6 +17,8 @@ const UI = () => window.UI_THEME || {
 /** Specimen tray column width in the arrange grid (design px). */
 /** Tray column width (design px) — fits two portrait specimen cards side by side. */
 const ARRANGE_TRAY_COL_PX = 400;
+/** Left inset of specimen cards in the arrange tray (matches BotanicalTray sideRail grid padding). */
+const ARRANGE_TRAY_SPECIMEN_INSET_PX = 24;
 
 // Stage strip colors (shared by chrome + full-bleed viewport bands)
 const STAGE_MIDDLE_BG = '#ffffff';
@@ -483,6 +485,13 @@ const App = () => {
     ctx.fillStyle = window.CYANOTYPE_PRINT_DENSE_HEX || '#F8F8F2';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.globalCompositeOperation = 'source-over';
+    if (window.drawCyanotypePaperGrain) {
+      window.drawCyanotypePaperGrain(ctx, canvas.width, canvas.height, paperSeed, {
+        tiled: true,
+        opacity: 0.13,
+        blend: 'multiply',
+      });
+    }
 
     // Download
     canvas.toBlob((blob) => {
@@ -507,21 +516,30 @@ const App = () => {
   const useArrangeGridLayout = phase === 'arrange';
   const showPhaseFooter = phase === 'arrange' || phase === 'expose' || phase === 'brush' || phase === 'rinse' || phase === 'reveal';
   const [phaseFooter, setPhaseFooterState] = React.useState(null);
+  // Handlers are written by the active phase on every layout (not via footer state),
+  // so remounts/HMR cannot leave the footer wired to a dead setState.
+  const phaseFooterOnClicksRef = React.useRef([]);
   const setPhaseFooter = React.useCallback((next) => {
     setPhaseFooterState((prev) => {
       if (next == null) return prev == null ? prev : null;
       if (prev == null) return next;
-      const prevAct = prev.action || (prev.actions && prev.actions[0]);
-      const nextAct = next.action || (next.actions && next.actions[0]);
+      const prevActs = prev.actions?.length ? prev.actions : (prev.action ? [prev.action] : []);
+      const nextActs = next.actions?.length ? next.actions : (next.action ? [next.action] : []);
+      const prevAct = prevActs[0];
+      const nextAct = nextActs[0];
       if (
         prev.status === next.status
-        && prevAct?.label === nextAct?.label
-        && !!prevAct?.disabled === !!nextAct?.disabled
+        && prevActs.length === nextActs.length
+        && prevActs.every((a, i) => a?.label === nextActs[i]?.label && !!a?.disabled === !!nextActs[i]?.disabled)
+        && prevAct?.variant === nextAct?.variant
       ) {
         return prev;
       }
       return next;
     });
+  }, []);
+  const bindPhaseFooterClicks = React.useCallback((clicks) => {
+    phaseFooterOnClicksRef.current = Array.isArray(clicks) ? clicks : [];
   }, []);
   const phaseFooterActions = phaseFooter?.actions?.length
     ? phaseFooter.actions
@@ -572,7 +590,16 @@ const App = () => {
   const arrangeTrayBottomMode = layout.compactArrangeChrome && phase === 'arrange';
   /** Keep bottom-tray portal geometry during slide-out; phase is already `expose` while `exiting`. */
   const trayPortalBottomMode = layout.compactArrangeChrome && (phase === 'arrange' || trayOverlayState === 'exiting');
-  const arrangeBottomInsetPx = arrangeTrayBottomMode ? trayBandHeight : 0;
+  /** Portaled bottom tray only — grid layout keeps tray in-flow (no scale inset). */
+  const arrangeBottomInsetPx = (arrangeTrayBottomMode && !useArrangeGridLayout) ? trayBandHeight : 0;
+  const arrangeScrollable = phase === 'arrange' && window.getArrangeStageScalePolicy
+    ? window.getArrangeStageScalePolicy(layout.vh, stageH, arrangeBottomInsetPx).scrollable
+    : false;
+  const layoutCtx = {
+    ...layout,
+    arrangeScrollable,
+    arrangePaperBottomInsetPx: phase === 'arrange' ? arrangeBottomInsetPx : 0,
+  };
 
   const trayRailSurfacePx = window.approxTrayRailWidthPx
     ? window.approxTrayRailWidthPx(layout.vw, layout.tier, arrangeTrayBottomMode)
@@ -604,7 +631,7 @@ const App = () => {
   };
   const LayoutTierCtx = window.LayoutTierContext || React.createContext({ tier: 'xl', compactArrangeChrome: false });
   return (
-    <LayoutTierCtx.Provider value={layout}>
+    <LayoutTierCtx.Provider value={layoutCtx}>
     <>
     <ScaleStage
       width={stageW}
@@ -626,7 +653,9 @@ const App = () => {
     }}>
       {/* Header */}
       <div ref={sectionRefs.current.header} style={{
-        padding: '14px 20px',
+        padding: phase === 'arrange'
+          ? `14px 20px 14px ${arrangeStacked ? 12 : ARRANGE_TRAY_SPECIMEN_INSET_PX}px`
+          : '14px 20px',
         background: UI().bg,
         borderBottom: `1px solid ${UI().line}`,
         display: 'flex',
@@ -651,7 +680,12 @@ const App = () => {
         borderBottom: `1px solid ${UI().line}`,
         background: UI().bg,
       }}>
-        <PhaseStepperGrid phase={stepperPhase} brushLiftComplete={brushLiftComplete} compact={layout.compactArrangeChrome}/>
+        <PhaseStepperGrid
+          phase={stepperPhase}
+          brushLiftComplete={brushLiftComplete}
+          compact={layout.compactArrangeChrome && !arrangeScrollable}
+          contentPadLeft={arrangeStacked ? 12 : ARRANGE_TRAY_SPECIMEN_INSET_PX}
+        />
       </div>
 
       {/* Main: phase canvas + tray row (tray inside so Expose can paint sky into the former drawer band). */}
@@ -670,7 +704,7 @@ const App = () => {
           position: 'relative',
           overflow: 'visible',
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'stretch',
           justifyContent: 'center',
         }}>
           {useArrangeGridLayout ? (
@@ -751,6 +785,7 @@ const App = () => {
                     onSelectedIdChange={setSelectedItemId}
                     paperTone={paperTone}
                     inlineLayout={true}
+                    ghost={drag}
                   />
                 </motion.div>
               </motion.div>
@@ -770,27 +805,21 @@ const App = () => {
               onComplete={onBrushComplete}
               onLiftSpecimensOff={onBrushLiftSpecimensOff}
               onFooterChange={setPhaseFooter}
+              onFooterClicks={bindPhaseFooterClicks}
               trayBandHeight={0}
             />
           )}
-          {!useArrangeGridLayout && phase === 'rinse' && (
+          {!useArrangeGridLayout && (phase === 'rinse' || phase === 'reveal') && (
             <RinsePhase
               items={items}
               paperTone={paperTone}
               printVariationSeed={printVariationSeed}
+              complete={phase === 'reveal'}
               onComplete={onRinseComplete}
-              onFooterChange={setPhaseFooter}
-              trayBandHeight={0}
-            />
-          )}
-          {!useArrangeGridLayout && phase === 'reveal' && (
-            <RevealPhase
-              items={items}
-              paperTone={paperTone}
-              printVariationSeed={printVariationSeed}
               onSave={onSave}
               onNew={onNew}
               onFooterChange={setPhaseFooter}
+              onFooterClicks={bindPhaseFooterClicks}
               trayBandHeight={0}
             />
           )}
@@ -824,9 +853,13 @@ const App = () => {
           flexShrink: 0,
           display: 'grid',
           gridTemplateColumns: showFooterActionColumn ? '1fr auto' : '1fr',
-          borderTop: `1px solid ${UI().line}`,
+          borderTop: `${UI().lineWidth}px solid ${UI().line}`,
           background: UI().bg,
-          minHeight: 56,
+          height: 64,
+          minHeight: 64,
+          maxHeight: 64,
+          boxSizing: 'border-box',
+          overflow: 'hidden',
         }}>
           <div style={{
             padding: '14px 16px',
@@ -849,7 +882,7 @@ const App = () => {
             {phase !== 'arrange' && phase !== 'expose' && (phaseFooter?.status ?? '')}
           </div>
           {showFooterActionColumn && (
-            <div style={{ padding: '12px 10px 8px', display: 'flex', alignItems: 'stretch', gap: 8 }}>
+            <div style={{ padding: '8px 10px', display: 'flex', alignItems: 'stretch', gap: 8, flexWrap: 'nowrap' }}>
               {phase === 'arrange' && (
                 <InkButton onClick={toExpose} disabled={items.length === 0 || trayExiting} style={{ minWidth: 200, alignSelf: 'stretch' }}>
                   Expose to sun →
@@ -868,7 +901,7 @@ const App = () => {
               {phaseFooterActions.map((act, i) => (
                 <InkButton
                   key={act.label + String(i)}
-                  onClick={act.onClick}
+                  onClick={() => phaseFooterOnClicksRef.current[i]?.()}
                   disabled={act.disabled}
                   variant={act.variant || 'primary'}
                   style={{ minWidth: 200, alignSelf: 'stretch' }}
@@ -1046,8 +1079,8 @@ const App = () => {
             : ((phase === 'arrange' && arrangeTrayBottomMode)
               ? `calc(${trayBandHeight}px + max(64px, env(safe-area-inset-bottom, 0px)) + 8px)`
               : 14),
-          left: (phase === 'arrange' && (useArrangeGridLayout || arrangeTrayBottomMode)) ? 14 : exitLeftScreen,
-          right: (phase === 'arrange' && arrangeTrayBottomMode && !useArrangeGridLayout) ? 14 : 'auto',
+          left: 'auto',
+          right: (phase === 'arrange' && (useArrangeGridLayout || arrangeTrayBottomMode)) ? 14 : exitLeftScreen,
           zIndex: 10003,
           fontFamily: UI().fontMono,
           fontSize: 10,
@@ -1197,7 +1230,6 @@ const ViewportBleedBands = ({ bandRefs, scale, layoutRef, layoutSignal, scrollpo
       )}
       <div style={ruleStyle(headerRuleY)}/>
       {bands.stepper && <div style={ruleStyle(bands.stepper.top + bands.stepper.height - UI().lineWidth)}/>}
-      {bands.footer && <div style={ruleStyle(bands.footer.top - 1)}/>}
       {tr && tr.height > 1 && !isContinuousPhase && <div style={ruleStyle(tr.top)}/>}
     </>
   );
@@ -1206,36 +1238,53 @@ const ViewportBleedBands = ({ bandRefs, scale, layoutRef, layoutSignal, scrollpo
 // Scales fixed design canvas (width×height) to the viewport. Height-first for every phase so
 // the stage fills the viewport vertically (same as arrange); horizontal overflow is clipped.
 // Arrange (step 1): below a viewport-height floor, scale stops shrinking and the stage scrolls.
-const ScaleStage = ({ width, height, children, bandRefs, layoutSignal, stretchToViewportWidth = false }) => {
+const ScaleStage = ({
+  width, height, children, bandRefs, layoutSignal, stretchToViewportWidth = false,
+  arrangeSideTrayPx = 0, arrangeBottomInsetPx = 0, exposeTransitionInsetPx = 0, trayExiting = false,
+}) => {
   const [scale, setScale] = React.useState(1);
   const [stageWidth, setStageWidth] = React.useState(width);
   const [scrollable, setScrollable] = React.useState(false);
   const layoutRef = React.useRef(null);
   const scrollportRef = React.useRef(null);
+  const lockedStageWidthRef = React.useRef(null);
   React.useEffect(() => {
     const measure = () => {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const natural = Math.max(0, vh) / Math.max(height, 1);
+      const bottomInset = Math.max(0, arrangeBottomInsetPx || 0);
+      const exposeInset = Math.max(0, exposeTransitionInsetPx || 0);
+      const verticalInset = layoutSignal === 'arrange'
+        ? (trayExiting ? exposeInset : bottomInset)
+        : (layoutSignal === 'expose' ? exposeInset : 0);
+      const natural = Math.max(0, vh - verticalInset) / Math.max(height, 1);
       let s = natural;
       let scroll = false;
       if (layoutSignal === 'arrange' && window.getArrangeStageScalePolicy) {
-        const policy = window.getArrangeStageScalePolicy(vh, height, 0);
+        const policy = window.getArrangeStageScalePolicy(vh, height, verticalInset);
         s = policy.scale;
         scroll = policy.scrollable;
       }
       setScale(s);
       setScrollable(scroll);
       if (stretchToViewportWidth) {
-        setStageWidth(Math.max(480, vw / Math.max(s, 0.001)));
+        const nextW = Math.max(480, vw / Math.max(s, 0.001));
+        if (scroll) {
+          lockedStageWidthRef.current = Math.max(lockedStageWidthRef.current || 0, nextW);
+          setStageWidth(lockedStageWidthRef.current);
+        } else {
+          lockedStageWidthRef.current = null;
+          setStageWidth(nextW);
+        }
       } else {
+        lockedStageWidthRef.current = null;
         setStageWidth(width);
       }
     };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [width, height, layoutSignal, stretchToViewportWidth]);
+  }, [width, height, layoutSignal, stretchToViewportWidth, arrangeBottomInsetPx, exposeTransitionInsetPx, trayExiting]);
   const gutterBg = stretchToViewportWidth ? STAGE_STRIP_BG : middleBleedBackground(layoutSignal);
   const visualStageH = height * scale;
   const stageInner = (
@@ -1258,6 +1307,7 @@ const ScaleStage = ({ width, height, children, bandRefs, layoutSignal, stretchTo
       overflowX: 'hidden',
       overflowY: scrollable ? 'auto' : 'hidden',
       WebkitOverflowScrolling: scrollable ? 'touch' : undefined,
+      paddingLeft: arrangeSideTrayPx > 0 ? arrangeSideTrayPx : 0,
       boxSizing: 'border-box',
     }}>
       {bandRefs && (
@@ -1362,7 +1412,7 @@ const PhaseStepperRail = ({ shellRef, sectionRefs, phase, children, arrangeCompa
   );
 };
 
-const PhaseStepperGrid = ({ phase, brushLiftComplete, compact }) => {
+const PhaseStepperGrid = ({ phase, brushLiftComplete, compact, contentPadLeft }) => {
   const phases = [
     { key: 'arrange', label: 'Arrange' },
     { key: 'expose',  label: 'Expose' },
@@ -1375,7 +1425,8 @@ const PhaseStepperGrid = ({ phase, brushLiftComplete, compact }) => {
     activeIdx = phases.findIndex(p => p.key === 'rinse');
   }
   const padY = compact ? 8 : 12;
-  const padX = compact ? 6 : 10;
+  const padLeft = contentPadLeft ?? (compact ? 12 : ARRANGE_TRAY_SPECIMEN_INSET_PX);
+  const padRight = compact ? 6 : 10;
   const stepperEase = `${STEPPER_PHASE_TRANSITION_MS}ms ${TRAY_EXIT_EASE}`;
   return (
     <div style={{
@@ -1391,7 +1442,7 @@ const PhaseStepperGrid = ({ phase, brushLiftComplete, compact }) => {
           <div
             key={p.key}
             style={{
-              padding: `${padY}px ${padX}px`,
+              padding: `${padY}px ${padRight}px ${padY}px ${padLeft}px`,
               borderRight: i < phases.length - 1 ? `1px solid ${UI().line}` : 'none',
               background: filled ? UI().bgInverse : UI().bg,
               color: filled ? UI().fgInverse : UI().fg,
